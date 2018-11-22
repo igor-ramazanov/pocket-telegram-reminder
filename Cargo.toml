@@ -1,0 +1,7 @@
+[package]
+name = "pocket-telegram-reminder"
+version = "0.1.0"
+authors = ["Igor Ramazanov <igor.ramazanov@protonmail.com>"]
+
+[dependencies]
+hyper = "0.12"
