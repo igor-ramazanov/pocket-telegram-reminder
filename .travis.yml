@@ -1,15 +1,23 @@
 language: rust
 sudo: required
 services:
-- docker
-on:
-  branch: master
-script:
-- chmod -R 777 .
-- docker run --rm -it -v "$(pwd)":/home/rust/src ekidd/rust-musl-builder cargo build --release
-- TAG=$(cat Cargo.toml | grep version | awk '{print$3;}' | awk -F '"' '{print $2;}')
-- docker build -t igorramazanov/pocket-reminder-telegram-bot:"$TAG" .
-- echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
-- docker push igorramazanov/pocket-reminder-telegram-bot:"$TAG"
-- docker tag igorramazanov/pocket-reminder-telegram-bot:"$TAG" igorramazanov/pocket-reminder-telegram-bot:latest
-- docker push igorramazanov/pocket-reminder-telegram-bot:latest
+  - docker
+matrix:
+  include:
+    - branches:
+        only:
+          - master
+      script:
+        - chmod -R 777 .
+        - docker run --rm -it -v "$(pwd)":/home/rust/src ekidd/rust-musl-builder cargo build --release
+        - TAG=$(cat Cargo.toml | grep version | awk '{print$3;}' | awk -F '"' '{print $2;}')
+        - docker build -t igorramazanov/pocket-reminder-telegram-bot:"$TAG" .
+        - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+        - docker push igorramazanov/pocket-reminder-telegram-bot:"$TAG"
+        - docker tag igorramazanov/pocket-reminder-telegram-bot:"$TAG" igorramazanov/pocket-reminder-telegram-bot:latest
+        - docker push igorramazanov/pocket-reminder-telegram-bot:latest
+    - branches:
+        only:
+          - dev
+      script:
+        - cargo test
