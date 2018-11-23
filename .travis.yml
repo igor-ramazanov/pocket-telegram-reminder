@@ -5,8 +5,6 @@ services:
   - docker
 branches:
   only:
-    - master
+    - dev
 script:
-  - chmod -R 777 .
-  - ./build.sh
-  - ./publish.sh
+  - cargo test
