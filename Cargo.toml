@@ -4,4 +4,6 @@ version = "0.1.0"
 authors = ["Igor Ramazanov <igor.ramazanov@protonmail.com>"]
 
 [dependencies]
-hyper = "0.12"
+telegram-bot = "0.6"
+futures = "0.1.25"
+tokio-core = "0.1.17"

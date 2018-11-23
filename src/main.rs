@@ -1,29 +1,38 @@
-extern crate hyper;
+extern crate futures;
+extern crate telegram_bot;
+extern crate tokio_core;
 
-use std::io::{self, Write};
-use hyper::Client;
-use hyper::rt::{self, Future, Stream};
+use std::env;
+
+use futures::Stream;
+use tokio_core::reactor::Core;
+use telegram_bot::*;
 
 fn main() {
-    rt::run(rt::lazy(|| {
-        // This is main future that the runtime will execute.
-        //
-        // The `lazy` is because we don't want any of this executing *right now*,
-        // but rather once the runtime has started up all its resources.
-        //
-        // This is where we will setup our HTTP client requests.
-        // still inside rt::run...
-        let client = Client::new();
+    let mut core = Core::new().unwrap();
 
-        let uri = "http://httpbin.org/ip".parse().unwrap();
+    let token = env::var("TELEGRAM_BOT_API_TOKEN").unwrap();
+    let api = Api::configure(token).build(core.handle()).unwrap();
 
-        client
-            .get(uri)
-            .map(|res| {
-                println!("Response: {}", res.status());
-            })
-            .map_err(|err| {
-                println!("Error: {}", err);
-            })
-    }));
+    // Fetch new updates via long poll method
+    let future = api.stream().for_each(|update| {
+
+        // If the received update contains a new message...
+        if let UpdateKind::Message(message) = update.kind {
+
+            if let MessageKind::Text {ref data, ..} = message.kind {
+                // Print received text message to stdout.
+                println!("<{}>: {}", &message.from.first_name, data);
+
+                // Answer message with "Hi".
+                api.spawn(message.text_reply(
+                    format!("Hi, {}! You just wrote '{}'", &message.from.first_name, data)
+                ));
+            }
+        }
+
+        Ok(())
+    });
+
+    core.run(future).unwrap();
 }
