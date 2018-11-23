@@ -1,18 +1,12 @@
 language: rust
 sudo: required
+cache: cargo
 services:
   - docker
-matrix:
-  include:
-    - branches:
-        only:
-          - master
-      script:
-        - chmod -R 777 .
-        - ./build.sh
-        - ./publish.sh
-    - branches:
-        only:
-          - dev
-      script:
-        - cargo test
+branches:
+  only:
+    - master
+script:
+  - chmod -R 777 .
+  - ./build.sh
+  - ./publish.sh
