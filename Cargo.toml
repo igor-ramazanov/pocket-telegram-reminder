@@ -7,3 +7,7 @@ authors = ["Igor Ramazanov <igor.ramazanov@protonmail.com>"]
 telegram-bot = "0.6"
 futures = "0.1.25"
 tokio-core = "0.1.17"
+reqwest = "0.9.5"
+serde_json = "1.0"
+serde_derive = "1.0.80"
+serde = "1.0.80"
