@@ -215,7 +215,7 @@ fn send_random_unread_article(api: &Api,
                         }
                     }
                 }
-                Err(e) => {
+                Err(_) => {
                     send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
                     eprintln!("Couldn't parse {} to JSON", response.text().unwrap());
                 }
