@@ -1,12 +1,7 @@
 # pocket-telegram-reminder [![Build Status](https://travis-ci.com/igor-ramazanov/pocket-telegram-reminder.svg?branch=dev)](https://travis-ci.com/igor-ramazanov/pocket-telegram-reminder)
 Telegram bot reminiscent of unread articles from Pocket.
 
-Sends a random and unread article with a custom period:
-* Once an hour
-* Once three hours
-* Once six hours
-* Once twelve hours
-* Once a day
+Sends a random and unread article once a day.
 
 The project still in the active development and some features are not ready yet, check the issues page for more details.
 
