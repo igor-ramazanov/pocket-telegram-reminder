@@ -134,7 +134,10 @@ fn main() {
     let timer = Timer::new();
     let mut chat_states = HashMap::new();
 
-    reschedule_from_file(settings_file_name, &timer, &client, &token, &consumer_key);
+    let previous_states = reschedule_from_file(settings_file_name, &timer, &client, &token, &consumer_key);
+    for (chat_id, state) in previous_states {
+        chat_states.insert(chat_id, state);
+    }
 
     let future = api.stream().for_each(|update| {
         if let UpdateKind::Message(message) = update.kind {
