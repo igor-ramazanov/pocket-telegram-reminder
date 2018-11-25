@@ -240,7 +240,7 @@ fn proceed_callback(timer: &Timer,
                     send_random_unread_article(client, chat_id, token, consumer_key, &access_token);
                     let scheduling = Scheduling {
                         at: Utc::now(),
-                        period: Period::Minute,
+                        period: Period::Day,
                     };
                     save_to_file(settings_file_name, chat_id, &access_token, &scheduling);
                     schedule_sending(timer, client, chat_id, token, consumer_key, &access_token, &scheduling);
