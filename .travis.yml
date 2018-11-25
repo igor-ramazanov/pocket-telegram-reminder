@@ -3,8 +3,6 @@ sudo: required
 cache: cargo
 services:
   - docker
-branches:
-  only:
-    - dev
 script:
-  - cargo test
+  - if [ "$TRAVIS_BRANCH" = "dev" ]; then cargo test; fi
+  - if [ "$TRAVIS_BRANCH" = "master" ]; then chmod -R 777 .; ./build.sh; ./publish.sh; fi
