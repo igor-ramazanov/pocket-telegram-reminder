@@ -14,5 +14,7 @@ cargo build --release
 ```
 
 ### Scratch Docker image
-
 [See ./build.sh script](/build.sh)
+
+## Running
+[See ./run-example.sh script](/run-example.sh)

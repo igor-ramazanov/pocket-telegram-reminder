@@ -3,23 +3,29 @@ extern crate reqwest;
 extern crate serde_json;
 extern crate serde;
 extern crate rand;
-extern crate timer;
-extern crate time;
+extern crate openssl_probe;
 #[macro_use]
 extern crate serde_derive;
 extern crate telegram_bot;
 extern crate tokio_core;
+extern crate time;
+extern crate timer;
+extern crate chrono;
 
 use std::collections::HashMap;
 use std::env;
 use futures::Stream;
-use timer::Timer;
-use timer::Guard;
-use time::Duration;
 use serde_json::*;
+use timer::Timer;
 use reqwest::StatusCode;
 use telegram_bot::*;
 use tokio_core::reactor::Core;
+use reqwest::Client;
+use chrono::DateTime;
+use std::ops::Add;
+use chrono::Timelike;
+use chrono::offset::Utc;
+use time::Duration;
 
 #[derive(Serialize, Deserialize)]
 struct InitialRequest {
@@ -38,10 +44,9 @@ struct AuthorizationRequest {
     code: String,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 struct AccessToken {
-    access_token: String,
-    username: String,
+    access_token: String
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,9 +56,20 @@ struct RetrieveRequest {
     detailType: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ChatMessage {
+    chat_id: String,
+    text: String,
+}
+
 enum AuthorizationState {
     WaitingForCallback(String),
-    Authorized(AccessToken, Guard),
+    Authorized((AccessToken, Scheduling)),
+}
+
+struct Scheduling {
+    at: DateTime<Utc>,
+    period: Period,
 }
 
 enum Period {
@@ -108,34 +124,38 @@ impl Period {
 }
 
 fn main() {
+    openssl_probe::init_ssl_cert_env_vars();
+    let settings_file_name = "settings.txt";
     let token = env::var("TELEGRAM_BOT_API_TOKEN").unwrap();
     let consumer_key = env::var("POCKET_API_CONSUMER_KEY").unwrap();
     let (mut core, api) = build_api(&token);
     let redirect_uri = String::from("https://t.me/PocketReminderBot?start=send_me_to_proceed_next");
-    let client = reqwest::Client::new();
-    let mut user_states: HashMap<UserId, AuthorizationState> = HashMap::new();
+    let client = Client::new();
+    let timer = Timer::new();
+    let mut chat_states = HashMap::new();
+
+    reschedule_from_file(settings_file_name, &timer, &client, &token, &consumer_key);
 
     let future = api.stream().for_each(|update| {
         if let UpdateKind::Message(message) = update.kind {
-            let maybe_user_state_update = match user_states.get(&message.from.id) {
-                Some(AuthorizationState::Authorized(ref access_token, _)) => {
-                    send_message(&api, &(message.from.id), &String::from("Here is your random unread article!"));
-                    send_random_unread_article(&api, &client, &(message.from.id), &consumer_key, access_token);
+            let maybe_state_update = match chat_states.get(&(message.chat.id())) {
+                Some(AuthorizationState::Authorized((access_token, _))) => {
+                    send_message(&client, &token, &(message.chat.id()), &String::from("Here is your random unread article!"));
+                    send_random_unread_article(&client, &(message.chat.id()), &token, &consumer_key, access_token);
                     None
                 }
                 Some(AuthorizationState::WaitingForCallback(code)) =>
-                    proceed_callback(&client, &token, &consumer_key, &(message.from.id), &api, code),
+                    proceed_callback(&timer, &client, &consumer_key, &token, &(message.chat.id()), code, settings_file_name),
                 None =>
-                    init_auth(&client, &consumer_key, &redirect_uri, &(message.from.id), &api)
+                    init_auth(&client, &consumer_key, &token, &redirect_uri, &(message.chat.id()))
             };
 
-            if let Some((user_id, state)) = maybe_user_state_update {
-                user_states.insert(user_id, state);
+            if let Some((chat_id, state)) = maybe_state_update {
+                chat_states.insert(chat_id, state);
             }
         }
         Ok(())
     });
-
     core.run(future).unwrap();
 }
 
@@ -145,11 +165,11 @@ fn build_api(token: &String) -> (Core, Api) {
     (core, api)
 }
 
-fn init_auth(client: &reqwest::Client,
+fn init_auth(client: &Client,
              consumer_key: &String,
+             token: &String,
              redirect_uri: &String,
-             user_id: &UserId,
-             api: &Api) -> Option<(UserId, AuthorizationState)> {
+             chat_id: &ChatId) -> Option<(ChatId, AuthorizationState)> {
     let initial_request_struct = InitialRequest {
         consumer_key: consumer_key.clone(),
         redirect_uri: redirect_uri.clone(),
@@ -165,38 +185,39 @@ fn init_auth(client: &reqwest::Client,
     match initial_request.send() {
         Ok(ref mut response) if response.status() == StatusCode::from_u16(200).unwrap() => match response.json::<InitialResponse>() {
             Ok(initial_response) => {
-                send_message(api, user_id, &String::from("Follow the link, verify the access, return back and press 'Start'!"));
-                send_message(api, user_id, &format!(
+                send_message(client, token, chat_id, &String::from("Follow the link, verify the access, return back and press 'Start'!"));
+                send_message(client, token, chat_id, &format!(
                     "https://getpocket.com/auth/authorize?request_token={}&redirect_uri={}",
                     initial_response.code,
                     redirect_uri));
-                Some((*user_id, AuthorizationState::WaitingForCallback(initial_response.code)))
+                Some((*chat_id, AuthorizationState::WaitingForCallback(initial_response.code)))
             }
             Err(e) => {
-                send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+                send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
                 eprintln!("Couldn't parse {} to InitialResponse, reason: {}", response.text().unwrap(), e);
                 None
             }
         }
         Ok(response) => {
-            send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
             eprintln!("Pocket API have not returned 200, status: {}", response.status());
             None
         }
         Err(e) => {
-            send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
             eprintln!("Couldn't make /request request to Pocket API, reason: {}", e);
             None
         }
     }
 }
 
-fn proceed_callback(client: &reqwest::Client,
-                    token: &String,
+fn proceed_callback(timer: &Timer,
+                    client: &Client,
                     consumer_key: &String,
-                    user_id: &UserId,
-                    api: &Api,
-                    code: &String) -> Option<(UserId, AuthorizationState)> {
+                    token: &String,
+                    chat_id: &ChatId,
+                    code: &String,
+                    settings_file_name: &str) -> Option<(ChatId, AuthorizationState)> {
     let authorization_request_struct = AuthorizationRequest {
         consumer_key: consumer_key.clone(),
         code: (*code).clone(),
@@ -212,54 +233,121 @@ fn proceed_callback(client: &reqwest::Client,
         Ok(ref mut response) if response.status() == StatusCode::from_u16(200).unwrap() =>
             match response.json::<AccessToken>() {
                 Ok(access_token) => {
-                    send_message(api, user_id, &String::from("Here is your random unread article! Wait for next one after 24 hours or chat me at any time and I provide new one instantly."));
-                    send_random_unread_article(api, client, user_id, consumer_key, &access_token);
-                    let guard = schedule_sending(token, user_id, consumer_key, &access_token, Period::Minute);
-                    Some((*user_id, AuthorizationState::Authorized(access_token, guard)))
+                    send_message(client, token, chat_id, &String::from("Here is your random unread article! Wait for next one after 24 hours or chat me at any time and I provide new one instantly."));
+                    send_random_unread_article(client, chat_id, token, consumer_key, &access_token);
+                    let scheduling = Scheduling {
+                        at: Utc::now(),
+                        period: Period::Minute,
+                    };
+                    save_to_file(settings_file_name, chat_id, &access_token, &scheduling);
+                    schedule_sending(timer, client, chat_id, token, consumer_key, &access_token, &scheduling);
+                    Some((*chat_id, AuthorizationState::Authorized((access_token, scheduling))))
                 }
                 Err(e) => {
                     eprintln!("Couldn't parse {} to AccessToken, reason: {}", response.text().unwrap(), e);
-                    send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+                    send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
                     None
                 }
             }
         Ok(response) => {
-            send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
             eprintln!("Pocket API have not returned 200, status: {}", response.status());
             None
         }
         Err(e) => {
-            send_message(api, user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
             eprintln!("Couldn't make /authorize request to Pocket API, reason: {}", e);
             None
         }
     }
 }
 
-fn schedule_sending(token: &String,
-                    user_id: &UserId,
-                    consumer_key: &String,
-                    access_token: &AccessToken,
-                    period: Period,
-) -> Guard {
-    let timer = Timer::new();
-    let token_cloned = token.clone();
-    let user_id_cloned = user_id.clone();
-    let consumer_key_cloned = consumer_key.clone();
-    let access_token_cloned = access_token.clone();
-    let guard = timer.schedule_repeating(
-        period.to_duration(),
-        move || {
-            let (_core, api) = build_api(&token_cloned);
-            let client = reqwest::Client::new();
-            send_random_unread_article(&api, &client, &user_id_cloned, &consumer_key_cloned, &access_token_cloned);
-        });
-    guard
+fn save_to_file(file_name: &str,
+                chat_id: &ChatId,
+                access_token: &AccessToken,
+                scheduling: &Scheduling) -> () {
+    use std::fs;
+    use std::io::Write;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(true)
+        .open(file_name)
+        .unwrap();
+    if let Err(e) = writeln!(file,
+                             "{}::{}::{}::{}",
+                             chat_id,
+                             access_token.access_token,
+                             scheduling.at.to_rfc2822(),
+                             scheduling.period.to_string()) {
+        eprintln!("Couldn't write scheduling to file {}, reason: {}", file_name, e);
+    }
 }
 
-fn send_random_unread_article(api: &Api,
-                              client: &reqwest::Client,
-                              user_id: &UserId,
+fn reschedule_from_file(file_name: &str,
+                        timer: &Timer,
+                        client: &Client,
+                        token: &String,
+                        consumer_key: &String) -> Vec<(ChatId, AuthorizationState)> {
+    use std::fs;
+    use std::convert::From;
+    use std::str::FromStr;
+    let content = fs::read_to_string(file_name).unwrap();
+    let lines: Vec<&str> = content.split_terminator(|c: char| c == '\n').collect();
+    let mut vec: Vec<(ChatId, AuthorizationState)> = vec![];
+    for line in lines {
+        let mut parts: Vec<&str> = line.split("::").collect();
+        parts.reverse();
+        let chat_id: ChatId = parts.pop().unwrap().parse::<i64>().unwrap().into();
+        let access_token: AccessToken = AccessToken {
+            access_token: String::from(parts.pop().unwrap())
+        };
+        let at = DateTime::from_utc(DateTime::parse_from_rfc2822(parts.pop().unwrap()).unwrap().naive_utc(), Utc);
+        let period = Period::from_str(parts.pop().unwrap()).unwrap();
+        let scheduling = Scheduling {
+            at,
+            period,
+        };
+        schedule_sending(timer, client, &chat_id, token, consumer_key, &access_token, &scheduling);
+        vec.push((chat_id, AuthorizationState::Authorized((access_token, scheduling))));
+    }
+    vec
+}
+
+fn schedule_sending(timer: &Timer,
+                    client: &Client,
+                    chat_id: &ChatId,
+                    token: &String,
+                    consumer_key: &String,
+                    access_token: &AccessToken,
+                    scheduling: &Scheduling,
+) -> () {
+    let c = client.clone();
+    let i = chat_id.clone();
+    let t = token.clone();
+    let k = consumer_key.clone();
+    let a = access_token.clone();
+
+    let now = Utc::now();
+    let d = now
+        .with_hour(scheduling.at.hour()).unwrap()
+        .with_minute(scheduling.at.minute()).unwrap()
+        .with_second(scheduling.at.second()).unwrap();
+    let d = if d < now {
+        d.add(Duration::days(1))
+    } else {
+        d
+    };
+
+    let g = timer.schedule(d, Some(scheduling.period.to_duration()), move || {
+        send_random_unread_article(&c, &i, &t, &k, &a);
+    });
+    g.ignore();
+}
+
+fn send_random_unread_article(client: &Client,
+                              chat_id: &ChatId,
+                              token: &String,
                               consumer_key: &String,
                               access_token: &AccessToken) -> () {
     let request_data = RetrieveRequest {
@@ -283,37 +371,51 @@ fn send_random_unread_article(api: &Api,
                                     let keys: Vec<&String> = map.keys().collect();
                                     let random_number = rand::random::<i64>();
                                     let random_article_id = keys[((random_number as usize) % keys.len())];
-                                    send_message(&api, &user_id, &format!("https://getpocket.com/a/read/{}", *random_article_id));
+                                    send_message(client, token, chat_id, &format!("https://getpocket.com/a/read/{}", *random_article_id));
                                 }
                                 _ => {
-                                    send_message(&api, &user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+                                    send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
                                     eprintln!("Couldn't parse 'list' to JSON object, 'list' is {}", v);
                                 }
                             }
                         }
                         None => {
-                            send_message(&api, &user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+                            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
                             eprintln!("Couldn't find 'list' JSON object in response: {}", v);
                         }
                     }
                 }
                 Err(_) => {
-                    send_message(&api, &user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+                    send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
                     eprintln!("Couldn't parse {} to JSON", response.text().unwrap());
                 }
             }
         ,
         Ok(response) => {
-            send_message(&api, &user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
             eprintln!("Pocket API have not returned 200, status: {}", response.status());
         }
         Err(e) => {
-            send_message(&api, &user_id, &String::from("Some error occurred, chat @themirrortruth for help"));
+            send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
             eprintln!("Couldn't make /get request to Pocket API, reason: {}", e);
         }
     }
 }
 
-fn send_message(api: &Api, user_id: &UserId, text: &String) -> () {
-    api.spawn(user_id.text(text));
+fn send_message(client: &Client, token: &String, chat_id: &ChatId, text: &String) -> () {
+    let chat_message = ChatMessage {
+        chat_id: chat_id.to_string(),
+        text: text.clone(),
+    };
+    let body = serde_json::to_string(&chat_message).unwrap();
+    let request = client
+        .post(format!("https://api.telegram.org/bot{}/sendMessage", token).as_str())
+        .header("Content-Type", "application/json; charset=UTF8")
+        .body(body);
+
+    match request.send() {
+        Ok(ref response) if response.status() != StatusCode::from_u16(200).unwrap() =>
+            eprintln!("Telegram returned {} instead of 200", response.status().as_u16()),
+        _ => ()
+    };
 }
