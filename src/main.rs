@@ -374,7 +374,15 @@ fn send_random_unread_article(client: &Client,
                                     let keys: Vec<&String> = map.keys().collect();
                                     let random_number = rand::random::<i64>();
                                     let random_article_id = keys[((random_number as usize) % keys.len())];
-                                    send_message(client, token, chat_id, &format!("https://getpocket.com/a/read/{}", *random_article_id));
+                                    if let Some(Value::Object(map)) = map.get(random_article_id) {
+                                        if let Some(Value::String(title)) = map.get(&String::from("resolved_title")) {
+                                            send_message(client,
+                                                         token,
+                                                         chat_id,
+                                                         &format!("{}\nhttps://getpocket.com/a/read/{}",
+                                                                  title, random_article_id));
+                                        }
+                                    };
                                 }
                                 _ => {
                                     send_message(client, token, chat_id, &String::from("Some error occurred, chat @themirrortruth for help"));
