@@ -13,7 +13,7 @@ The project still in the active development and some features are not ready yet,
 cargo build --release
 ```
 
-### Scratch Docker image
+### Docker image
 [See ./build.sh script](/build.sh)
 
 ## Running
